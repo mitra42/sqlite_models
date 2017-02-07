@@ -39,15 +39,28 @@ CHANGES
 """
 TODO
 Think about auto-saving
-TODO-VALUE
-Think about how to register a new type e.g. Decimal or Value
+Think about how to register a new type e.g. Decimal or Value TODO-VALUE
 """
 
 """
-LEARN
-row_factory
-cursor - maybe create, and return cursor as result of find
-register_converter and register_adapter e.g. fro Value<>str or converter functions https://docs.python.org/2/library/sqlite3.html
+HOWTO
+Define a table: See example.py.ModelExample and ModelExamples
+Will need to define a
+    _tablename  Name of the sql table to store it in
+    _createsql  SQL creation string, specifies types of fields stored
+                "CREATE TABLE %s (id integer primary key, name text, ..., parms json, lastmod timestamp, tags tags)"
+    _insertsql  SQL insertion string for a blank object (one NULL per column)
+                "INSERT INTO %s VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
+    _validtags  If there is a tags field, a set of the tags that are allowed
+                {"FOO"}
+    _parmfields If there is a parms field, a dictionary of the parm names and classes, if this is recursive, then
+                use "None" as the class and store to it immediately after the class is defined
+                {"pfield1": unicode, "pfield2": int, "mother": None, "parmstime": datetime, "parmsmodels": None}
+
+Add support for a class to be stored in fields of the database. See !ADD-TYPE
+Will need to define functions for converting attributes to something that can be converted to JSON and vica-versa
+Register these functions with Model.add_supportedclass(class, {"parms2attr": ..., "attr2parms": ...})
+If they are to be stored in columns, use sqlite3.register_adapter or __conform__ and sqlite3.register_converter
 """
 
 class Model(object):
@@ -91,6 +104,7 @@ class Model(object):
     _validtags = {}             # No valid tags by default
     _parmfields = ()
     _deletesql = "DELETE FROM %s WHERE id = ?"  # Unlikely to be subclassed
+    _supportedclasses = {}
 
     def __init__(self, row):
         """
@@ -165,7 +179,16 @@ class Model(object):
         """
         if dropfirst:
             SqliteWrap.db.sqlsend("DROP TABLE IF EXISTS " + cls._tablename)
-        SqliteWrap.db.sqlsend(cls._createsql, verbose=False)
+        SqliteWrap.db.sqlsend(cls._createsql % cls._tablename, verbose=False)
+
+    @classmethod
+    def supportedfunction(self, supportedclass, func ):
+        """
+        :param supportedclass: Class we are checking for support for
+        :param func:            Functionality that might be supported
+        :return:                function (or lambda) that handles it
+        """
+        return supportedclass in Model._supportedclasses and Model._supportedclasses[supportedclass].get(func, None)
 
     def load(self, verbose=False, row=None):
         """
@@ -194,12 +217,14 @@ class Model(object):
                             parmscls=self._parmfields[parmskey]
                             if s is None:   # Catch any None as constructor often wont work on None
                                 self.__setattr__(parmskey, None)
-                            elif parmscls in (datetime,): # Special case time stored in known format
-                                self.__setattr__(parmskey, parmscls.strptime(s, "%Y-%m-%dT%H:%M:%S.%f"))
+                            elif self.supportedfunction(parmscls, "parms2attr"):
+                                # Find types stored in a known format
+                                # See examples in datetime
+                                self.__setattr__(parmskey, self.supportedfunction(parmscls, "parms2attr")(s))
                             else:   # Default to constructor of class (also works with str, unicode, int, float)
                                 # Works with subclasses of: Model; Models;
                                 self.__setattr__(parmskey, parmscls(s))
-                            #SEE OTHER !ADD-TYPE if parmscls() can't handle string as stored in SQL
+                            #SEE OTHER !ADD-TYPE if parmscls() can't handle string as stored in SQL, define as supportedclass
                 else:
                     self.__setattr__(key, row[key])
             self._loaded = True
@@ -213,7 +238,7 @@ class Model(object):
         call this from iinsert(..<class dependent field list>.) in each class
         Note - can pass record as parameters and will auto-convert to id.
         """
-        id = SqliteWrap.db.sqlsend(cls._insertsql).lastrowid
+        id = SqliteWrap.db.sqlsend(cls._insertsql % cls._tablename).lastrowid
         obj = cls(id)
         if cls._lastmodfield:
             kwargs[cls._lastmodfield] = timestamp()
@@ -278,7 +303,7 @@ class Model(object):
 
         field_update = ", ".join("%s = ?" % k for k in keys)
         # noinspection PyTypeChecker
-        where, ids = SqliteWrap.sqlpair("id", id)
+        where, ids = self.sqlpair("id", id)
         updatesql = "UPDATE %s SET %s WHERE %s" % (self._tablename, field_update, where)
         values = values + ids
         rowcount = SqliteWrap.db.sqlsend(updatesql, values, verbose=False).rowcount
@@ -306,7 +331,7 @@ class Model(object):
                             Log.iinsert(cls, i, None, None, LOGSET, u"update field:%s=%s" % (k, repr(v)), None, _login)
             """
         else:
-            raise ModelExceptionUpdateFailure(sql=updatesql, valuestr=str(values))
+            raise ModelExceptionUpdateFailure(sql=updatesql, valuestring=str(values))
         return logkwargs  # For reporting to user
 
     @classmethod
@@ -320,7 +345,7 @@ class Model(object):
         See Models.find if want a list returned
         """
         keys, val1 = zip(
-            *[SqliteWrap.sqlpair(key, val, parmfields=cls._parmfields) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
+            *[cls.sqlpair(key, val) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
         vals = flatten2d(val1)
         sql = "SELECT * FROM %s WHERE %s" % (cls._tablename, " AND ".join(keys))
         rr = SqliteWrap.db.sqlfetch(sql, vals, verbose=_verbose)
@@ -333,6 +358,60 @@ class Model(object):
                 return None
         else:
              return cls(rr[0])
+
+    @classmethod
+    def sqlpair(cls, key, val):
+        """
+        Return a pair of key and value that depends on the type of val and key, suitable for using in a query
+        Note this is used for the WHERE clause of both SELECT and UPDATE
+        parmfields should be specified if its possible the key could be in parmfields (e.g. in Record.find)
+        Supports val's like:
+        lists,tuples,sets,Models   -> converted to "IN"    (won't work on parm fields)
+        None                -> IS NULL  (won't work on parm fields)
+        Model               -> id   ( inefficient on parm fields)
+        %string%            -> LIKE ( inefficient on parm fields)
+        >|<|>=|<=|!=|<> 123 -> operator 123  (doesn't work on parm fields)
+        """
+        # from models.record import Record
+        # TODO - handle Value via the converters https://docs.python.org/2/library/sqlite3.html
+        # from models.unit import Value
+        # TODO include if needed# from misc.jsonextended import JSONtoSqlText
+        if key == "tags":
+            return key + " LIKE ?", ["%'" + val + "'%"]
+        # SEE OTHER !ADD-TYPE - check for type in both parmfields and non-parmfields,
+        if key not in cls._parmfields:
+            # Note this next one is problematic since sqlite3 bug with list as a parameter and cant pass as string or tuple either
+            if isinstance(val, (tuple, list, set)):  # Also handles Models
+                return key + " IN (" + ','.join(['?'] * len(val)) + ")", [v.id if isinstance(v, Model) else v for v
+                                                                          in
+                                                                          val]
+            if val is None:
+                return key + " IS NULL", []  # XXX Note this will fail (Operational Error) if val is None but key is in parmfields
+            if isinstance(val, Model):
+                return key + " = ?", [val.id()]  # Note not in parmfields as pulled out above
+            if isinstance(val, basestring) and len(val) >= 3 and val[0] == '%' and val[-1] == '%':
+                return key + " LIKE ?", [val]
+            if isinstance(val, basestring):
+                ww = val.split(None, 1)
+                if len(ww) > 1 and ww[0] in ('>', '<', '>=', '<=', '!=', '<>'):
+                    return key + " " + ww[0] + " ?", [ww[1]]
+                    # Drop thru and check as string or int
+            return key + " = ?", [val]
+        else:  # key is in parmfields
+            if isinstance(val, (basestring,)):
+                return "parms LIKE ?", [
+                    '%"' + key + '": "' + val + '"%']  # this is really not an efficient search, if often used then move field from parms to main field
+            if isinstance(val, Model):
+                return "parms LIKE ?", ['%"' + key + '": ' + unicode(val.id()) + '%']
+            if cls.supportedfunction(val.__class__,"attr2parms"):
+                return "parms LIKE ?", ['%"' + key + '": ' + cls.supportedfunction(val.__class__,"attr2parms")(val) + '%']
+            if isinstance(val, (int, float)):
+                # This is really not an efficient search, and prone to error if not encoded exactly if often used then move field from parms to main field
+                return "parms LIKE ?", ['%"' + key + '": ' + unicode(val) + '%']
+            # if isinstance(val, (Value,)): #TODO-TYPE support Value in parmfields
+            #    val = JSONtoSqlText().encode((val.dd(), val.unit(ONLYONE).id()))  # See matching code in record.py:parms2sql
+            #    return "parms LIKE ?", ['%"' + key + '": ' + unicode(val) + '%']
+            assert False, ("Syntax unsupported", key, val)
 
     # ========== TAGS ==(see also Tags class) ========================================
     def hastag(self, tag): return tag in self.tags
@@ -358,10 +437,11 @@ class Model(object):
     def forparms(self, name):
         # Convert parameter for storing in parms
         val = self.__getattr__(name)
-        if isinstance(val, Model):
+        if self.supportedfunction(val.__class__,"attr2parms"):
+            # Support extension types that define a way to write to parms
+            return self.supportedfunction(val.__class__,"attr2parms")(val)
+        elif isinstance(val, Model):
             return val.id
-        elif isinstance(val, (datetime,)):
-            return val.isoformat()
         elif isinstance(val, Models):
             return [m.id for m in val]  # Store as list of ids
         else:
@@ -371,6 +451,16 @@ class Model(object):
     def parms(self):
         # Build a dictionary from all the fields saved in the parms field
         return { k: self.forparms(k) for k in self._parmfields}
+
+    @classmethod
+    def add_supportedclass(self, newclass, **kwargs):
+        Model._supportedclasses[newclass] = kwargs
+
+# This is an example of adding support for the datetime class (See !ADD-TYPE)
+Model.add_supportedclass(datetime,
+               parms2attr=lambda s: datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%f"),
+               attr2parms=datetime.isoformat, # Convert a datetime to a storable string
+               )
 
 class Tags(set):
     #def adapt_tags(self):
@@ -480,7 +570,7 @@ class Models(list):
         See Model.find if want a single item returned
         """
         keys, val1 = zip(
-            *[SqliteWrap.sqlpair(key, val, parmfields=cls._parmfields) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
+            *[cls._parentclass.sqlpair(key, val) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
         vals = flatten2d(val1)
         sql = "SELECT * FROM %s WHERE %s" % (cls._parentclass._tablename, " AND ".join(keys))
         return cls(SqliteWrap.db.sqlfetch(sql, vals, verbose=_verbose))
@@ -493,3 +583,4 @@ def timestamp():
 def flatten2d(rr):
     return [ leaf for tree in rr for leaf in tree ]  # Super obscure but works and fast
     # See  http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python/952952#952952
+

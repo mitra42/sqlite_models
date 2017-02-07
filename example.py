@@ -3,14 +3,16 @@ import sqlite3
 from model import Model, Models
 from json import loads, dumps
 from datetime import datetime
+from decimal import Decimal
 from model_exceptions import ModelExceptionRecordNotFound, ModelExceptionInvalidTag, ModelExceptionCantFind
 
 class ModelExample(Model):
     _tablename = "modelexample"
-    _createsql = "CREATE TABLE %s (id integer primary key, name text, father modelexample, siblings modelexamples, parms json, lastmod timestamp, tags tags)" % _tablename
-    _insertsql = "INSERT INTO %s VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % _tablename
+    _createsql = "CREATE TABLE %s (id integer primary key, name text, father modelexample, siblings modelexamples, " \
+                 "kitty Decimal, parms json, lastmod timestamp, tags tags)"
+    _insertsql = "INSERT INTO %s VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
     _validtags = {"FOO"}
-    _parmfields = {"pfield1": unicode, "pfield2": int, "mother": None, "parmstime": datetime, "parmsmodels": None}
+    _parmfields = {"pfield1": unicode, "pfield2": int, "mother": None, "change": Decimal, "parmstime": datetime, "parmsmodels": None}
 
 ModelExample._parmfields["mother"]=ModelExample # Because undefined when defining _parmfields above
 
@@ -27,11 +29,20 @@ class ModelExamples(Models):
 ModelExample._parmfields["parmsmodels"]=ModelExamples   # Done here as undefined during definition of ModelExample
 
 def convert_modelexamples(s):
-    # s is a list of id's
     return ModelExamples(loads(s))
 
 sqlite3.register_converter("modelexamples", convert_modelexamples)  # Return JSON, could be dict or list
-#sqlite3.register_adapter(ModelExamples, dumps)   # Note this also covers Models which is a list
+
+# ==== Support DECIMAL type ====
+from decimal import Decimal
+# This is an example of adding support for the decimal class in both parms fields and columns (See !ADD-TYPE)
+Model.add_supportedclass(Decimal,
+               #parms2attr=lambda s: Decimal(s), # Not required since its constructor works
+               attr2parms=unicode,              # Convert a datetime to a storable string
+               )
+sqlite3.register_adapter(Decimal,unicode)
+sqlite3.register_converter("decimal",Decimal)
+# =======
 
 def test():
     from sqlitewrap import SqliteWrap
@@ -96,9 +107,13 @@ def test():
     brocopy = ModelExample(3)
     sibs.append(brocopy)    # Now got a duplicate
     assert len(sibs.set()) == 2 # set should delete duplicate
-    assert len(ModelExamples.all()) == 4
-    bar.delete()
-    assert len(ModelExamples.all()) == 3
+    # Test supported type Decimal which is stored as a strong to preserve decimal places
+    bar.update(change=Decimal("123.456"))
+    assert ModelExample(1).change == Decimal("123.456")
+    bar.update(kitty=Decimal("123.456"))
+    assert ModelExample(1).kitty == Decimal("123.456")
+    # Note cant do arithmetic "finds" on Decimal since stored as a precise string.
+    # Test find
     assert len(ModelExamples.find(name="Brian")) == 1, "Should find one record"
     assert ModelExample.find(name="Brian") == brother, "Should find the brother record"
     assert ModelExample.find(name="Xyz") is None, "Cant find it"
@@ -108,5 +123,9 @@ def test():
         pass
     else:
         assert False,"Should throw ModelExceptionCantFind"
+    #---
+    assert len(ModelExamples.all()) == 4
+    bar.delete()
+    assert len(ModelExamples.all()) == 3
 
     SqliteWrap.db.disconnect()
