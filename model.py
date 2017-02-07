@@ -1,12 +1,12 @@
 # encoding: utf-8
 import sqlite3
-from json import loads, dumps
 from datetime import datetime
+from json import loads, dumps
 from sqlitewrap import SqliteWrap
 
 # Local files
 from model_exceptions import (ModelExceptionRecordNotFound, ModelExceptionUpdateFailure, ModelExceptionInvalidTag,
-                              ModelExceptionRecordTooMany)
+                              ModelExceptionRecordTooMany, ModelExceptionCantFind)
 
 """
 GOALS
@@ -40,7 +40,6 @@ CHANGES
 TODO
 Think about auto-saving
 TODO-VALUE
-find <<TESTING
 Think about how to register a new type e.g. Decimal or Value
 """
 
@@ -50,8 +49,6 @@ row_factory
 cursor - maybe create, and return cursor as result of find
 register_converter and register_adapter e.g. fro Value<>str or converter functions https://docs.python.org/2/library/sqlite3.html
 """
-
-db = None
 
 class Model(object):
     """
@@ -167,8 +164,8 @@ class Model(object):
         relies on a string "_createsql" in each subclass
         """
         if dropfirst:
-            db.sqlsend("DROP TABLE IF EXISTS " + cls._tablename)
-        db.sqlsend(cls._createsql, verbose=False)
+            SqliteWrap.db.sqlsend("DROP TABLE IF EXISTS " + cls._tablename)
+        SqliteWrap.db.sqlsend(cls._createsql, verbose=False)
 
     def load(self, verbose=False, row=None):
         """
@@ -180,7 +177,7 @@ class Model(object):
         if row or not self._loaded: # Need to check row first, or recurses if self._loaded not set (e.g. during init)
             if not row: # We haven't been passed an initialize, so try and load from database
                 sql = "SELECT * FROM %s WHERE id = ?" % self._tablename
-                row = db.sqlfetch1(sql, (self.id,), verbose=False)
+                row = SqliteWrap.db.sqlfetch1(sql, (self.id,), verbose=False)
                 if row is None:
                     raise ModelExceptionRecordNotFound(table=self._tablename, id=self.id)
             assert isinstance(row, (sqlite3.Row, dict)), \
@@ -216,7 +213,7 @@ class Model(object):
         call this from iinsert(..<class dependent field list>.) in each class
         Note - can pass record as parameters and will auto-convert to id.
         """
-        id = db.sqlsend(cls._insertsql).lastrowid
+        id = SqliteWrap.db.sqlsend(cls._insertsql).lastrowid
         obj = cls(id)
         if cls._lastmodfield:
             kwargs[cls._lastmodfield] = timestamp()
@@ -243,7 +240,7 @@ class Model(object):
         """
         Delete an object
         """
-        db.sqlsend(self._deletesql % self._tablename, (self.id,))
+        SqliteWrap.db.sqlsend(self._deletesql % self._tablename, (self.id,))
 
     def update(self, _skipNone=False, _lastmod=True, **kwargs): # _log=True, _login=None,
         """
@@ -284,7 +281,7 @@ class Model(object):
         where, ids = SqliteWrap.sqlpair("id", id)
         updatesql = "UPDATE %s SET %s WHERE %s" % (self._tablename, field_update, where)
         values = values + ids
-        rowcount = db.sqlsend(updatesql, values, verbose=False).rowcount
+        rowcount = SqliteWrap.db.sqlsend(updatesql, values, verbose=False).rowcount
         if rowcount > 0:
             pass
             """TODO-LOG
@@ -326,12 +323,12 @@ class Model(object):
             *[SqliteWrap.sqlpair(key, val, parmfields=cls._parmfields) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
         vals = flatten2d(val1)
         sql = "SELECT * FROM %s WHERE %s" % (cls._tablename, " AND ".join(keys))
-        rr = db.sqlfetch(sql, vals, verbose=_verbose)
+        rr = SqliteWrap.db.sqlfetch(sql, vals, verbose=_verbose)
         if len(rr) > 1 and _manyerr:
             raise _manyerr(table=cls._tablename, where=unicode(**kwargs))
         elif len(rr) == 0:
             if _nullerr:
-                raise _nullerr(table=cls._tablename, where=unicode(**kwargs))
+                raise _nullerr(table=cls._tablename, where=unicode(kwargs))
             else:
                 return None
         else:
@@ -472,7 +469,7 @@ class Models(list):
         """
         :return: list of all objects
         """
-        return db.sqlfetch(cls._selectallsql % cls._parentclass._tablename)
+        return SqliteWrap.db.sqlfetch(cls._selectallsql % cls._parentclass._tablename)
 
     @classmethod
     def find(cls, _skipNone=False, _verbose=False, **kwargs):
@@ -486,108 +483,11 @@ class Models(list):
             *[SqliteWrap.sqlpair(key, val, parmfields=cls._parmfields) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
         vals = flatten2d(val1)
         sql = "SELECT * FROM %s WHERE %s" % (cls._parentclass._tablename, " AND ".join(keys))
-        return cls(db.sqlfetch(sql, vals, verbose=_verbose))
+        return cls(SqliteWrap.db.sqlfetch(sql, vals, verbose=_verbose))
 
-
-class ModelExample(Model):
-    _tablename = "modelexample"
-    _createsql = "CREATE TABLE %s (id integer primary key, name text, father modelexample, siblings modelexamples, parms json, lastmod timestamp, tags tags)" % _tablename
-    _insertsql = "INSERT INTO %s VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % _tablename
-    _validtags = {"FOO"}
-    _parmfields = {"pfield1": unicode, "pfield2": int, "mother": None, "parmstime": datetime, "parmsmodels": None}
-
-ModelExample._parmfields["mother"]=ModelExample # Because undefined when defining _parmfields above
-
-def convert_modelexample(s):
-    # Note s is never None or Null etc, that skips the conversion and returns None
-    return ModelExample(s)
-
-sqlite3.register_converter("modelexample", convert_modelexample)  # Return JSON, could be dict or list
-
-
-class ModelExamples(Models):
-    _parentclass = ModelExample
-
-ModelExample._parmfields["parmsmodels"]=ModelExamples   # Done here as undefined during definition of ModelExample
-
-def convert_modelexamples(s):
-    # s is a list of id's
-    return ModelExamples(loads(s))
-
-sqlite3.register_converter("modelexamples", convert_modelexamples)  # Return JSON, could be dict or list
-#sqlite3.register_adapter(ModelExamples, dumps)   # Note this also covers Models which is a list
-
-db = SqliteWrap("test.db")
-
-def test():
-    # Create table
-    db.connect()
-    try:
-        ModelExample.createtable(dropfirst=True)    # ONLY WORKS ONCE
-    except sqlite3.OperationalError as e:
-        print e
-    # Create object in table
-    foo = ModelExample.insert(name="Foo")
-    assert foo.name == "Foo", "name should be Foo as loads its "+(foo.name or "None")
-    # Store something in it
-    foo.update(name="Bar")
-    # Retrieve it by id
-    try:
-        bar = ModelExample(111).load()
-    except Exception as e:
-        assert e.__class__ == ModelExceptionRecordNotFound
-    else:
-        assert False, "Should fail"
-    bar = ModelExample(1)   # Retrieve it
-    assert bar.name == "Bar", "Name should ahve been changed to Bar"  # Check its fields
-    foo.update(tags=None) # Update and check
-    assert not bar.tags, "Should be set to empty set by above"
-    assert not bar.hastag("FOO"),"Should not have tag foo now"
-    try:    # Check can't set invalid tag
-        bar.settags("BAZ")
-    except Exception as e:
-        assert e.__class__ == ModelExceptionInvalidTag
-    else:
-        assert False, "Should fail to set invalid tag"
-    assert not bar.hastag("BAZ"),"Should have tag foo now"
-    bar.settags("FOO")
-    assert bar.hastag("FOO"),"Should have tag foo now"
-    assert bar.hastag("FOO"),"Saved version have tag foo now"
-    assert bar.hasanytags(u"FOO"), "Should have any of FOO"
-    assert bar.hasanytags(["FOO","XYZ"]), "Should have FOO"
-    # Find it
-    bar.cleartags("FOO")
-    assert not bar.hastag("FOO"),"Should not have tag foo after clearing"
-    assert not bar.hastag("FOO"), "Should not have tag foo now"
-    bar.update(pfield1="Foo", pfield2=123)
-    assert ModelExample(1).load().pfield2 == 123, "Should have set and retrieved it"
-    baz = ModelExample.insert(name="Baz")
-    bar.update(father=baz)
-    assert ModelExample(1).load().father == baz, "Should have set father, uses __eq__ for comparisom"
-    bar.update(mother=baz)
-    assert ModelExample(1).load().mother == baz, "Should have set mother in parms field, uses __eq__ for comparisom"
-    now = timestamp()
-    bar.update(parmstime=now)
-    assert ModelExample(1).load().parmstime == now, "Should round trip datetime"
-    brother = ModelExample.insert(name="Brian")
-    sister = ModelExample.insert(name="Jane")
-    sibs = ModelExamples([brother, sister])
-    bar.update(siblings = sibs)
-    assert ModelExample(1).load().siblings.contains(brother)
-    assert not ModelExample(1).load().siblings.contains(bar), "Shouldnt contain bar"
-    bar.update(parmsmodels = sibs)
-    assert ModelExample(1).load().parmsmodels.contains(brother), "Should find brother in the parmsmodels after roundtrip"
-    brocopy = ModelExample(3)
-    sibs.append(brocopy)    # Now got a duplicate
-    assert len(sibs.set()) == 2 # set should delete duplicate
-    assert len(ModelExamples.all()) == 4
-    bar.delete()
-    assert len(ModelExamples.all()) == 3
-    assert len(ModelExamples.find(name="Brian")) == 1, "Should find one record"
-    assert ModelExample.find(name="Brian") == brother, "Should find the brother record"
-    db.disconnect()
 
 def timestamp():
+    """ Seperated out as sometimes implemented as timestamp of the query"""
     return datetime.now()
 
 def flatten2d(rr):

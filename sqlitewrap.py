@@ -3,13 +3,22 @@ import sqlite3
 import time  # For sleep
 from datetime import datetime
 
-
+# Referenced externally
 
 class SqliteWrap(object):
+    db = None       # Accessable if working single DB
+
     def __init__(self, databasefile):
         self.databasefile = databasefile
         self.conn = None
         self.isconnected = False
+
+    @classmethod
+    def setdb(cls, databasefile):
+        """
+        Called by applications to set the db pointer used by model.py
+        """
+        cls.db=cls(databasefile)
 
     def connect(self):
         """

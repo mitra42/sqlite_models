@@ -1,7 +1,7 @@
 # encoding: utf-8
 # import with ...
 # from model_exceptions import (ModelExceptionRecordNotFound, ModelExceptionUpdateFailure, ModelExceptionInvalidTag,
-#       ModelExceptionInvalidTag, ModelExceptionRecordTooMany)
+#       ModelExceptionInvalidTag, ModelExceptionRecordTooMany, ModelExceptionCantFind)
 
 class ModelException(Exception):
     """
@@ -17,7 +17,10 @@ class ModelException(Exception):
         self.msgargs=kwargs # Store arbitrary dict of message args (can be used ot output msg from template
 
     def __str__(self):
-        return self.msg.format(**self.msgargs)
+        try:
+            return self.msg.format(**self.msgargs)
+        except:
+            return self.msg+" "+unicode(self.msgargs)
 
 class ModelExceptionRecordNotFound(ModelException):
     errno=2
@@ -34,3 +37,7 @@ class ModelExceptionInvalidTag (ModelException):
 class ModelExceptionRecordTooMany(ModelException):
     errno=9004
     msg=u"Too many {table} found for {where}"
+
+class ModelExceptionCantFind(ModelException):
+    errno=9004
+    msg=u"Can't find any {table} where {where}"
