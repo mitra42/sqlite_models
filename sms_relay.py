@@ -7,18 +7,15 @@ from json import loads, dumps
 #from enum import Enum # From flufl.enum
 
 """
-Example application using Models, stand alone support for SMS-Relay
-
 GOALS
-- lightweight framework for writing SMS applications
+- lightweight SMS server that can work with SMSRelay application
+- build upon "Models" as an example
 
 TODO
 - add phonenumber as a type in SMSmessage and SMSgateway, and maybe use google phonenumbers library store in intl
 - ignore spam numbers and short codes (maybe after get google phonenumbers working)
-- clever dispatcher that can see message patterns or simple strings
+- clever dispatcher that can see message regexp patterns
 - handle expired
-
-EXAMPLES OF CALLS
 
 
 """
@@ -194,19 +191,25 @@ class SMSdispatcher(object):
 
     @classmethod
     def dispatch(cls, msg, gateway, **kwargs ):
+        """
+        A basic dispatcher, can be replaced in subclasses,
+        returns array of dicts with response to queue
+        """
+        #TODO clever dispatching matching regexps
+        #TODO allow modifiers on patterns.
         if cls.isspam(msg):
             msg.update(status=SMSmessageStatus.SPAM)
             return None
-        #TODO clever dispatching matching patterns
-        #TODO clever dispatching matching regexps
         for p in cls.patterns:
             for s in p["strings"]:
                 if s in msg.message:
-                    return p.f(msg)
+                    return p["f"](msg)
+
 
 class TestDispatcher(SMSdispatcher):
 
-    def thank(self, msg):
+    @classmethod
+    def thank(cls, msg):
         return { "phonenumber": msg.phonenumber, "message": "Thanks a bunch" }
 
 TestDispatcher.update(strings = ["hello","bonjour"], f=TestDispatcher.thank )
@@ -236,15 +239,14 @@ def test():
      'charging': u'true', 'device_id': u'1007'})
     assert resp["message"] == "Hello world", "Expect to find the message queued above"
     assert len(SMSgateways.all()) == 1
-    resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'lala', 'from': u'+16177179014',
+    resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'hello', 'from': u'+16177179014',
                                     'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100001'})
     assert len(SMSgateways.all()) == 1
     # Should queue a message "Thanks a bunch"
     resp = SMSrelay.sms_poll(_verbose=False, **{'battery_strength': u'50', 'timestamp': u'2017-02-07T06:28Z', 'wifi_strength': u'0', 'gsm_strength': u'[38]',
            'charging': u'true', 'device_id': u'1007', 'sim_num': u'[14159969138]'})
     assert len(SMSgateways.all()) == 1
-    print "XXX@246",resp
-    assert resp["message"] == "Thanks a bunch", "Should be respone from TestDispatcher"
+    assert resp["message"] == "Thanks a bunch", "Should be response from TestDispatcher"
     # Test loops
     resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'lala', 'from': u'+16177179014',
                                     'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100001'})
