@@ -237,7 +237,7 @@ class Record(Model):
         """
         # print "Checking typed pointers in ",cls.typetable
         # Could check like following BUT log contains pointers to deleted records so no point
-        # rr = sqlFetch("SELECT id,typedid FROM log WHERE type = 7 AND typedid NOT IN (SELECT id FROM meter)",verbose=True)
+        # rr = sqlFetch("SELECT id,typedid FROM log WHERE type = 7 AND typedid NOT IN (SELECT id FROM meter)",_verbose=True)
         pass
 
     @classmethod
@@ -466,7 +466,7 @@ class RecordClasses:
                 i.integrityCheckClass()
 
     @classmethod
-    def recopy_all(cls, verbose=True):
+    def recopy_all(cls, _verbose=True):
         """
         Copy all the database tables
         Note this would typically be used if a constraint has been removed and AFTER the "create" string was changed in the appropriate models/* file
@@ -478,11 +478,11 @@ class RecordClasses:
         from utils import sqlSend  # Avoid dependency of Record on test code
         for recordclass in reversed(cls.ClassDropOrder):
             print "Recopying", recordclass.typetable
-            recordclass.recopy(False, verbose)
+            recordclass.recopy(False, _verbose)
 
         for recordclass in cls.ClassDropOrder:
             # print "Dropping",recordclass.typetable
-            sqlSend("DROP TABLE IF EXISTS %s" % recordclass.typetable + "_old", verbose=verbose)
+            sqlSend("DROP TABLE IF EXISTS %s" % recordclass.typetable + "_old", _verbose=_verbose)
 
     @classmethod
     def table2id(cls, tablename):

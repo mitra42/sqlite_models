@@ -8,61 +8,6 @@ from sqlitewrap import SqliteWrap
 from model_exceptions import (ModelExceptionRecordNotFound, ModelExceptionUpdateFailure, ModelExceptionInvalidTag,
                               ModelExceptionRecordTooMany, ModelExceptionCantFind)
 
-"""
-GOALS
- - open source sqlite wrapper
- - Simpler than Django, ideally single file
- - Packagable
- - Good interaction with data types like "Value", and way to extend it
- - Support for common Python types like Decimal
- - Compatible with running under cherrypy, but not dependent on it.
- - Easy to add support for other types (TODO -document)
-"""
-
-"""
-CHANGES
-    - From 2016 version
-    - - dont use nullbehavior etc, use a triple - class, zero, array
-    - fields accessed via __getattr__ and __setattr__ rather than needing named functions
-    id() -> id
-    A.sameAs(B) =>  A == B
-    typetable => _tablename
-    create => _createsql
-    iinsertD => insert
-    updateFields => update
-    Tags is a class now (subclass of dict)
-    update works locally as well as onto disk, so don't have to reload after make changes
-    Doesnt use recopy, use "ALTER", recopy was only needed because of constraints (DONT USE CONSTRAINTS)
-"""
-
-
-"""
-TODO
-Think about auto-saving
-Think about how to register a new type e.g. Decimal or Value TODO-VALUE
-"""
-
-"""
-HOWTO
-Define a table: See example.py.ModelExample and ModelExamples
-Will need to define a
-    _tablename  Name of the sql table to store it in
-    _createsql  SQL creation string, specifies types of fields stored
-                "CREATE TABLE %s (id integer primary key, name text, ..., parms json, lastmod timestamp, tags tags)"
-    _insertsql  SQL insertion string for a blank object (one NULL per column)
-                "INSERT INTO %s VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
-    _validtags  If there is a tags field, a set of the tags that are allowed
-                {"FOO"}
-    _parmfields If there is a parms field, a dictionary of the parm names and classes, if this is recursive, then
-                use "None" as the class and store to it immediately after the class is defined
-                {"pfield1": unicode, "pfield2": int, "mother": None, "parmstime": datetime, "parmsmodels": None}
-
-Add support for a class to be stored in fields of the database. See !ADD-TYPE
-Will need to define functions for converting attributes to something that can be converted to JSON and vica-versa
-Register these functions with Model.add_supportedclass(class, {"parms2attr": ..., "attr2parms": ...})
-If they are to be stored in columns, use sqlite3.register_adapter or __conform__ and sqlite3.register_converter
-"""
-
 class Model(object):
     """
     A parent class - subclassed for each type of record in an application
@@ -179,7 +124,7 @@ class Model(object):
         """
         if dropfirst:
             SqliteWrap.db.sqlsend("DROP TABLE IF EXISTS " + cls._tablename)
-        SqliteWrap.db.sqlsend(cls._createsql % cls._tablename, verbose=False)
+        SqliteWrap.db.sqlsend(cls._createsql % cls._tablename, _verbose=False)
 
     @classmethod
     def supportedfunction(self, supportedclass, func ):
@@ -190,7 +135,7 @@ class Model(object):
         """
         return supportedclass in Model._supportedclasses and Model._supportedclasses[supportedclass].get(func, None)
 
-    def load(self, verbose=False, row=None):
+    def load(self, _verbose=False, row=None):
         """
         Load object if not loaded, return obj so can string together
         If row is set, then will load from row rather than from DB
@@ -200,7 +145,7 @@ class Model(object):
         if row or not self._loaded: # Need to check row first, or recurses if self._loaded not set (e.g. during init)
             if not row: # We haven't been passed an initialize, so try and load from database
                 sql = "SELECT * FROM %s WHERE id = ?" % self._tablename
-                row = SqliteWrap.db.sqlfetch1(sql, (self.id,), verbose=False)
+                row = SqliteWrap.db.sqlfetch1(sql, (self.id,), _verbose=False)
                 if row is None:
                     raise ModelExceptionRecordNotFound(table=self._tablename, id=self.id)
             assert isinstance(row, (sqlite3.Row, dict)), \
@@ -232,13 +177,13 @@ class Model(object):
 
 
     @classmethod
-    def insert(cls,  **kwargs):   #TODO-LOG bLog=False, _login=None,
+    def insert(cls, _verbose=False, **kwargs):   #TODO-LOG bLog=False, _login=None,
         """
         Standard insert method that uses the insertstr defined in each class
         call this from iinsert(..<class dependent field list>.) in each class
         Note - can pass record as parameters and will auto-convert to id.
         """
-        id = SqliteWrap.db.sqlsend(cls._insertsql % cls._tablename).lastrowid
+        id = SqliteWrap.db.sqlsend(cls._insertsql % cls._tablename, _verbose=_verbose ).lastrowid
         obj = cls(id)
         if cls._lastmodfield:
             kwargs[cls._lastmodfield] = timestamp()
@@ -258,7 +203,7 @@ class Model(object):
         #    for k, err in cls.floatfields:
         #        #TODO NEEDS SHOULDBE  if key == k: kwargs[k] = shouldbe(kwargs.get(k, None), float, ONEORNONE, err)
 
-        obj.update(_skipNone=False,  **kwargs)  # Set if explicitly None, 0 or "" # TODO-LOG _login=_login, bLog=bLog,
+        obj.update(_skipNone=False, _verbose=_verbose, **kwargs)  # Set if explicitly None, 0 or "" # TODO-LOG _login=_login, bLog=bLog,
         return obj
 
     def delete(self):
@@ -267,7 +212,7 @@ class Model(object):
         """
         SqliteWrap.db.sqlsend(self._deletesql % self._tablename, (self.id,))
 
-    def update(self, _skipNone=False, _lastmod=True, **kwargs): # _log=True, _login=None,
+    def update(self, _skipNone=False, _lastmod=True, _verbose=False, **kwargs): # _log=True, _login=None,
         """
         Update the record for all (field, newvalue) in kwargs
         Note that kwargs values may be a subclass of Model #TODO-LOG and it should be logged appropriately
@@ -306,7 +251,7 @@ class Model(object):
         where, ids = self.sqlpair("id", id)
         updatesql = "UPDATE %s SET %s WHERE %s" % (self._tablename, field_update, where)
         values = values + ids
-        rowcount = SqliteWrap.db.sqlsend(updatesql, values, verbose=False).rowcount
+        rowcount = SqliteWrap.db.sqlsend(updatesql, values, _verbose=False).rowcount
         if rowcount > 0:
             pass
             """TODO-LOG
@@ -348,7 +293,7 @@ class Model(object):
             *[cls.sqlpair(key, val) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
         vals = flatten2d(val1)
         sql = "SELECT * FROM %s WHERE %s" % (cls._tablename, " AND ".join(keys))
-        rr = SqliteWrap.db.sqlfetch(sql, vals, verbose=_verbose)
+        rr = SqliteWrap.db.sqlfetch(sql, vals, _verbose=_verbose)
         if len(rr) > 1 and _manyerr:
             raise _manyerr(table=cls._tablename, where=unicode(**kwargs))
         elif len(rr) == 0:
@@ -388,7 +333,7 @@ class Model(object):
             if val is None:
                 return key + " IS NULL", []  # XXX Note this will fail (Operational Error) if val is None but key is in parmfields
             if isinstance(val, Model):
-                return key + " = ?", [val.id()]  # Note not in parmfields as pulled out above
+                return key + " = ?", [val.id]  # Note not in parmfields as pulled out above
             if isinstance(val, basestring) and len(val) >= 3 and val[0] == '%' and val[-1] == '%':
                 return key + " LIKE ?", [val]
             if isinstance(val, basestring):
@@ -524,7 +469,7 @@ class Models(list):
     Handle ordered list of Model - all of same class
     adapter is covered by
     """
-    _parentclass = Model    # Subclass this to be the singular class
+    _singular = Model    # Subclass this to be the singular class
     _selectallsql = "SELECT * FROM %s"
     _parmfields = []
 
@@ -532,9 +477,12 @@ class Models(list):
     def __init__(self, ll):
         """
         Initialize an array of Models
-        :param ll: iterator that returns a valid arg to the ModelXyz() esp int or sqlite3.Row
+        :param ll: iterator that returns a valid arg to the ModelXyz() esp int or sqlite3.Row or single item
         """
-        super(Models, self).__init__([(l if isinstance(l, Model) else self._parentclass(l)) for l in ll ])
+        if not isinstance(ll, (list, tuple, set)):
+            ll = [ ll]
+        super(Models, self).__init__([(l if isinstance(l, Model) else self._singular(l)) for l in ll ])
+
 
     def __conform__(self, protocol):
         # Turn into a int to store in DB
@@ -559,7 +507,7 @@ class Models(list):
         """
         :return: list of all objects
         """
-        return SqliteWrap.db.sqlfetch(cls._selectallsql % cls._parentclass._tablename)
+        return cls(SqliteWrap.db.sqlfetch(cls._selectallsql % cls._singular._tablename))
 
     @classmethod
     def find(cls, _skipNone=False, _verbose=False, **kwargs):
@@ -570,10 +518,15 @@ class Models(list):
         See Model.find if want a single item returned
         """
         keys, val1 = zip(
-            *[cls._parentclass.sqlpair(key, val) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
+            *[cls._singular.sqlpair(key, val) for key, val in kwargs.iteritems() if not (_skipNone and val is None)])
         vals = flatten2d(val1)
-        sql = "SELECT * FROM %s WHERE %s" % (cls._parentclass._tablename, " AND ".join(keys))
-        return cls(SqliteWrap.db.sqlfetch(sql, vals, verbose=_verbose))
+        sql = "SELECT * FROM %s WHERE %s" % (cls._singular._tablename, " AND ".join(keys))
+        return cls(SqliteWrap.db.sqlfetch(sql, vals, _verbose=_verbose))
+
+    def update(self, _skipNone=False, _lastmod=True, _verbose=False, **kwargs): # _log=True, _login=None,
+        # Fairly inefficient update as has to load each one first
+        for m in self:
+            m.update(_skipNone=_skipNone, _lastmod=_lastmod, _verbose=_verbose, **kwargs)
 
 
 def timestamp():

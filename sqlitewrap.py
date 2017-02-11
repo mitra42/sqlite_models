@@ -38,13 +38,13 @@ class SqliteWrap(object):
         self.conn.close()
         self.isconnected = False
 
-    def sqlsend(self, sql, values=None, verbose=False, maxretrytime=60):
+    def sqlsend(self, sql, values=None, _verbose=False, maxretrytime=60):
         """
         Encapsulate most access to the sql server
         Send a sql string to a server, with values if supplied
 
         sql: sql statement that may contain usual "?" characters
-        verbose: set to true to print or log sql executed
+        _verbose: set to true to print or log sql executed
         values[]: array or list of parameters to sql
         ERR: IntegrityError (FOREIGN KEY constraint failed)
         should catch database is locked errors and delay - may need to catch other errors but watch logs for them
@@ -53,7 +53,7 @@ class SqliteWrap(object):
         # TODO-LOG - move prints to logs
         retrytime = 0.001  # Start with 1mS, might be far too short
         e = None
-        if verbose:
+        if _verbose:
             print sql, values if values else ""
         while retrytime < maxretrytime:  # Allows up to about 60 seconds of delay - enough for a long OVP generation
             # noinspection PyBroadException,PyBroadException
@@ -73,24 +73,24 @@ class SqliteWrap(object):
         print "SQL FAIL", sql, values if values else ""
         raise e  # This catches any other error
 
-    def sqlfetch(self, sql, values=None, verbose=False, limit=None):
+    def sqlfetch(self, sql, values=None, _verbose=False, limit=None):
         """
         Send a sql string to a server, and retrieve results
         sql: sql statement that may contain usual "?" characters
-        verbose: set to true to print or log sql executed - note some functions turn verbose on if cls.debug = True
+        _verbose: set to true to print or log sql executed - note some functions turn verbose on if cls.debug = True
         values[]: array or list of parameters to sql
         returns iterator (possibly empty) of Rows (each of which behaves like a dict)
         """
-        curs = self.sqlsend(sql, values, verbose=verbose)
+        curs = self.sqlsend(sql, values, _verbose=_verbose)
         return curs.fetchmany(limit) if limit else curs.fetchall()
 
-    def sqlfetch1(self, sql, values=None, verbose=False):
+    def sqlfetch1(self, sql, values=None, _verbose=False):
         """
         Send a sql string to a server, and retrieve single result or None
         sql: sql statement that may contain usual "?" characters
-        verbose: set to true to print or log sql executed - note some functions turn verbose on if cls.debug = True
+        _verbose: set to true to print or log sql executed - note some functions turn verbose on if cls.debug = True
         values[]: array or list of parameters to sql
         returns iterator (possibly empty) of Rows (each of which behaves like a dict)
         """
-        return self.sqlsend(sql, values, verbose=verbose).fetchone()
+        return self.sqlsend(sql, values, _verbose=_verbose).fetchone()
 

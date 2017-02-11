@@ -24,7 +24,7 @@ sqlite3.register_converter("modelexample", convert_modelexample)  # Return JSON,
 
 
 class ModelExamples(Models):
-    _parentclass = ModelExample
+    _singular = ModelExample
 
 ModelExample._parmfields["parmsmodels"]=ModelExamples   # Done here as undefined during definition of ModelExample
 
@@ -114,6 +114,8 @@ def test():
     assert ModelExample(1).kitty == Decimal("123.456")
     # Note cant do arithmetic "finds" on Decimal since stored as a precise string.
     # Test find
+    assert ModelExamples.find(name="Brian").__class__.__name__ == "ModelExamples"
+    assert ModelExamples.find(name="Brian")[0].__class__.__name__ == "ModelExample"
     assert len(ModelExamples.find(name="Brian")) == 1, "Should find one record"
     assert ModelExample.find(name="Brian") == brother, "Should find the brother record"
     assert ModelExample.find(name="Xyz") is None, "Cant find it"
