@@ -32,9 +32,13 @@ def test():
         databasefile="smsmessagetest.db",           # Connect to the database in this test file
         createTables=True, dropTablesFirst=True,    # Create tables, removing whatever was there first
         dispatcher = TestDispatcher,                # Class to handle incoming
+        httpserver = ('', 4243)                     # Serve it via HTTP
     )
+    #curl 'http://localhost:4243/sms_incoming?timestamp=2017-02-08T05:37:06Z&from=16177171111&sent_to=+14159969138&device_id=1007&message_id=100001&message=hello'
     resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'hello', 'from': u'+16177171111',
                                     'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100001'})
+    #curl 'http://localhost:4243/sms_poll?battery_strength=50&timestamp=2017-02-07T06:28Z&wifi_strength=0&gsm_strength=[38]&charging=true&device_id=1007'
+
     resp = SMSrelay.sms_poll(_verbose=False, **{'battery_strength': u'50', 'timestamp': u'2017-02-07T06:28Z', 'wifi_strength': u'0',
                                     'gsm_strength': u'[38]', 'charging': u'true', 'device_id': u'1007'})
     assert resp["message"] == "Thanks a bunch", "Should be response from TestDispatcher"

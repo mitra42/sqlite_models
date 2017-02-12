@@ -3,7 +3,7 @@
 # from model_exceptions import (ModelExceptionRecordNotFound, ModelExceptionUpdateFailure, ModelExceptionInvalidTag,
 #       ModelExceptionInvalidTag, ModelExceptionRecordTooMany, ModelExceptionCantFind)
 
-class ModelException(Exception):
+class MyBaseException(Exception):
     """
     Base class for Exceptions
     errno   Number of error,
@@ -21,6 +21,9 @@ class ModelException(Exception):
             return self.msg.format(**self.msgargs)
         except:
             return self.msg+" "+unicode(self.msgargs)
+
+class ModelException(MyBaseException):
+    pass
 
 class ModelExceptionRecordNotFound(ModelException):
     errno=2
@@ -41,3 +44,10 @@ class ModelExceptionRecordTooMany(ModelException):
 class ModelExceptionCantFind(ModelException):
     errno=9004
     msg=u"Can't find any {table} where {where}"
+
+class SMSRelayException(MyBaseException):
+    pass
+
+class SMSRelayExceptionInvalidRequest(MyBaseException):
+    errno=8001
+    msg=u"Request {req} is not found"

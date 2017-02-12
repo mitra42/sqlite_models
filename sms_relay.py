@@ -6,6 +6,9 @@ from aenum import Enum # From aenum
 from json import loads, dumps
 import re                           # Regex
 from sqlitewrap import SqliteWrap
+import BaseHTTPServer       # See https://docs.python.org/2/library/basehttpserver.html for docs on how servers work
+import urlparse             # See https://docs.python.org/2/library/urlparse.html
+
 #from enum import Enum # From flufl.enum
 
 """
@@ -20,6 +23,8 @@ TODO
 - Add priorities to dispatch patterns
 - Add HTTP server, prob in application
 - Match final version of SMSrelay android app
+- http return errors using send_error
+
 """
 class SMSstatus(Enum):
     QUEUED=1
@@ -146,6 +151,8 @@ class SMSdispatcher(object):
         returns array of dicts with response to queue
         See https://docs.python.org/3/howto/regex.html for syntax of regex
         """
+        verbose = True
+        if verbose: print "SMSdispatcher.dispatch",msg,kwargs
         if cls.isspam(msg):
             msg.update(status=SMSstatus.SPAM)
             return None
@@ -153,15 +160,48 @@ class SMSdispatcher(object):
             if p["type"]==SMSdispatchtype.STRINGIN:
                 for s in p["strings"]:
                     if s in msg.message:
+                        if verbose: print "SMSdispatcher matched",s
                         return p["f"](msg)
             if p["type"]==SMSdispatchtype.REGEX:
                 for s in p["regex"]:
                     m = s.search(msg.message)
                     if m:
+                        if verbose: print "SMSdispatcher matched",m.group()
                         return p["f"](msg, m)
+
+class SMSHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    dispatchclass = None
+
+    def do_GET(self):
+        verbose=True
+        try:
+            o = urlparse.urlparse(self.path)
+            res = self.dispatchclass.dispatch(o.path[1:],
+                                    **dict(urlparse.parse_qsl(o.query)))
+            if verbose: print "do_GET",res
+            if isinstance(res, dict):   # It should be, for returning via JSON
+                res = dumps(res)
+            self.send_response(200)
+            self.send_header('Content-type', 'text/json')
+            self.send_header('Content-Length', str(len(res)) if res else 0)
+            self.end_headers()
+            self.wfile.write(res)
+        except Exception as e:
+            #TODO - return error as 500
+            raise e
+
+    @classmethod
+    def httpserver(cls, ipandport, dispatchclass):
+        """
+        Run a server that uses this class as its handler.
+        """
+        cls.dispatchclass = dispatchclass       # Stops circular reference
+        BaseHTTPServer.HTTPServer( ipandport, cls).serve_forever()
+
 
 class SMSrelay():   # Encapsulation of class methods that define this
     dispatcher = None       # Set to class to dispatch messages to
+    exposed = ("sms_poll", "sms_incoming")
 
     @classmethod
     def sms_poll(cls, _verbose=False, sim_num=None, **kwargs):
@@ -194,6 +234,7 @@ class SMSrelay():   # Encapsulation of class methods that define this
     def sms_incoming(cls, **kwargs):
         # e.g. {'timestamp': u'2017-02-08T05:37:06Z', 'message': u'lala', 'from': u'+16177179014',
         # 'sent_to': u'14159969138', 'message_id': u'619472592'}
+        verbose=True
         kwargs["phonenumber"] = kwargs["from"]    # SMSmessage uses phonenumber for both incoming and outgoing
         del(kwargs["from"])
         gws = SMSgateways.findOrCreateAndUpdate(device_id=kwargs.get("device_id"), phonenumber=kwargs.get("sent_to"))
@@ -207,6 +248,7 @@ class SMSrelay():   # Encapsulation of class methods that define this
         else:
             # Send it the app
             response = cls.dispatcher.dispatch(msg=msg, gateway=gws)
+            if verbose: print "sms_incoming resp=",response
             # The dispatcher can send messages directly through sms_queue OR return one or more dicts { phonenumber="+1234", message="Hello"}
             if isinstance(response, (list, tuple)):
                 for r in response:
@@ -222,7 +264,7 @@ class SMSrelay():   # Encapsulation of class methods that define this
         return SMSmessage.insert(**kwargs)
 
     @classmethod
-    def setup(cls, databasefile=None, createTables=False, dropTablesFirst=False, dispatcher=None):
+    def setup(cls, databasefile=None, createTables=False, dropTablesFirst=False, dispatcher=None, httpserver=None):
         """
         :param databasefile:        Database file to connect to
         :param createTables:        True if should create tables in file
@@ -242,10 +284,29 @@ class SMSrelay():   # Encapsulation of class methods that define this
                 print e
         if dispatcher:
             SMSrelay.dispatcher=dispatcher  # Setup for testing
+        if httpserver:
+            SMSHTTPRequestHandler.httpserver(httpserver, cls)
+
+
 
     @classmethod
     def done(cls):
         SqliteWrap.db.disconnect()
+
+
+    @classmethod
+    def dispatch(cls, req, **kwargs):
+        #"sms_poll": sms_poll,
+        #"sms_incoming": sms_incoming
+        #TODO raise exception if not exposed
+        print "XXX@292 dispatching",req,kwargs
+        if req in SMSrelay.exposed:
+            return getattr(cls, req)(**kwargs)
+        else:
+            print "XXX@295 raising"
+            raise SMSRelayExceptionInvalidRequest(req=req)
+
+
 
 def test():
     print "Testing SMS Relay"
