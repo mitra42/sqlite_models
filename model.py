@@ -317,10 +317,6 @@ class Model(object):
         %string%            -> LIKE ( inefficient on parm fields)
         >|<|>=|<=|!=|<> 123 -> operator 123  (doesn't work on parm fields)
         """
-        # from models.record import Record
-        # TODO - handle Value via the converters https://docs.python.org/2/library/sqlite3.html
-        # from models.unit import Value
-        # TODO include if needed# from misc.jsonextended import JSONtoSqlText
         if key == "tags":
             return key + " LIKE ?", ["%'" + val + "'%"]
         # SEE OTHER !ADD-TYPE - check for type in both parmfields and non-parmfields,
@@ -353,9 +349,6 @@ class Model(object):
             if isinstance(val, (int, float)):
                 # This is really not an efficient search, and prone to error if not encoded exactly if often used then move field from parms to main field
                 return "parms LIKE ?", ['%"' + key + '": ' + unicode(val) + '%']
-            # if isinstance(val, (Value,)): #TODO-TYPE support Value in parmfields
-            #    val = JSONtoSqlText().encode((val.dd(), val.unit(ONLYONE).id()))  # See matching code in record.py:parms2sql
-            #    return "parms LIKE ?", ['%"' + key + '": ' + unicode(val) + '%']
             assert False, ("Syntax unsupported", key, val)
 
     # ========== TAGS ==(see also Tags class) ========================================

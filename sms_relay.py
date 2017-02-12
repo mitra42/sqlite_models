@@ -4,6 +4,8 @@ import sqlite3
 from model import Model, Models, timestamp
 from aenum import Enum # From aenum
 from json import loads, dumps
+import re                           # Regex
+from sqlitewrap import SqliteWrap
 #from enum import Enum # From flufl.enum
 
 """
@@ -14,12 +16,12 @@ GOALS
 TODO
 - add phonenumber as a type in SMSmessage and SMSgateway, and maybe use google phonenumbers library store in intl
 - ignore spam numbers and short codes (maybe after get google phonenumbers working)
-- clever dispatcher that can see message regexp patterns
 - handle expired
-
-
+- Add priorities to dispatch patterns
+- Add HTTP server, prob in application
+- Match final version of SMSrelay android app
 """
-class SMSmessageStatus(Enum):
+class SMSstatus(Enum):
     QUEUED=1
     GATEWAY=2
     SENT=3
@@ -37,10 +39,15 @@ class SMSmessageStatus(Enum):
         return self.value
 
 
-def convert_smsmessagestatus(s): return SMSmessageStatus(int(s))
-sqlite3.enable_callback_tracebacks(True)
+def convert_smsmessagestatus(s): return SMSstatus(int(s))
+#sqlite3.enable_callback_tracebacks(True)
 sqlite3.register_converter("smsmessagestatus", convert_smsmessagestatus)
-sqlite3.register_adapter(SMSmessageStatus,  SMSmessageStatus.adapt_smsmessagestatus)
+sqlite3.register_adapter(SMSstatus, SMSstatus.adapt_smsmessagestatus)
+
+class SMSdispatchtype(Enum):
+    STRINGIN=1
+    REGEX=2
+
 
 class SMSmessage(Model):
     _tablename = "smsqueue"
@@ -63,10 +70,10 @@ class SMSmessages(Models):
 
     @classmethod
     def nextmessage(self,  gws, _verbose=False):
-        mm = self.find(gateway=gws, status=SMSmessageStatus.QUEUED, _verbose=_verbose)  # Look for queued on any of gateways
+        mm = self.find(gateway=gws, status=SMSstatus.QUEUED, _verbose=_verbose)  # Look for queued on any of gateways
         if mm:
             return mm[0] if mm else None
-        mm = self.find(gateway=gws, status=SMSmessageStatus.FAILED, _verbose=_verbose)  # Look for failed and retry
+        mm = self.find(gateway=gws, status=SMSstatus.FAILED, _verbose=_verbose)  # Look for failed and retry
         if mm:
             return random.choice(mm) if mm else None   #Fairly dumb way to do retries, from random FAILED
 
@@ -116,6 +123,43 @@ SMSgateway._plural = SMSgateways    # Set plural, can't do this before SMSgatewa
 def convert_smsgateways(s): return SMSgateways(loads(s))
 sqlite3.register_converter("smsgateways", convert_smsgateways)
 
+
+class SMSdispatcher(object):
+    spam = [ "BUY ONE",]
+    patterns = []
+
+    @classmethod
+    def isspam(cls, message):   # Checking spam is a method of the dispatcher as may be language or context dependent
+        return any([sp in message.message for sp in cls.spam])
+
+    @classmethod
+    def update(self, **kwargs):
+        if kwargs["type"] == SMSdispatchtype.REGEX:
+            # Regex are compiled once to make them more efficient
+            kwargs["regex"]=[re.compile(r) for r in kwargs["regex"]]    # Array of compiled regex
+        self.patterns.append(kwargs)    # Append kwargs as a dict
+
+    @classmethod
+    def dispatch(cls, msg, gateway, **kwargs ):
+        """
+        A basic dispatcher, can be replaced in subclasses,
+        returns array of dicts with response to queue
+        See https://docs.python.org/3/howto/regex.html for syntax of regex
+        """
+        if cls.isspam(msg):
+            msg.update(status=SMSstatus.SPAM)
+            return None
+        for p in cls.patterns:
+            if p["type"]==SMSdispatchtype.STRINGIN:
+                for s in p["strings"]:
+                    if s in msg.message:
+                        return p["f"](msg)
+            if p["type"]==SMSdispatchtype.REGEX:
+                for s in p["regex"]:
+                    m = s.search(msg.message)
+                    if m:
+                        return p["f"](msg, m)
+
 class SMSrelay():   # Encapsulation of class methods that define this
     dispatcher = None       # Set to class to dispatch messages to
 
@@ -134,8 +178,8 @@ class SMSrelay():   # Encapsulation of class methods that define this
         if not msg:
             return {}
         else:
-            msg.update(status=SMSmessageStatus.GATEWAY)
-            msg.update(status=SMSmessageStatus.SENT)  # Simulate sent TODO replace with response from gateway that sent
+            msg.update(status=SMSstatus.GATEWAY)
+            msg.update(status=SMSstatus.SENT)  # Simulate sent TODO replace with response from gateway when that function available in Android SMSRelay
             gw = msg.gateway
             return {
                 'timestamp': timestamp().strftime('%Y-%m-%dT%H:%MZ'),  # Can change the format if the Relay needs a different type
@@ -157,9 +201,9 @@ class SMSrelay():   # Encapsulation of class methods that define this
         gw.update(lastincoming=timestamp())
         del(kwargs["sent_to"])  # Dont store on message, use gw
         del(kwargs["device_id"])  # Dont store on message, use gw
-        msg = SMSmessage.insert(gateway=gw, status=SMSmessageStatus.INCOMING, **kwargs)
+        msg = SMSmessage.insert(gateway=gw, status=SMSstatus.INCOMING, **kwargs)
         if msg._isloop:
-            msg.update(status=SMSmessageStatus.LOOP)
+            msg.update(status=SMSstatus.LOOP)
         else:
             # Send it the app
             response = cls.dispatcher.dispatch(msg=msg, gateway=gws)
@@ -174,61 +218,44 @@ class SMSrelay():   # Encapsulation of class methods that define this
 
     @classmethod
     def sms_queue(self, **kwargs):
-        kwargs["status"] = SMSmessageStatus.QUEUED
+        kwargs["status"] = SMSstatus.QUEUED
         return SMSmessage.insert(**kwargs)
 
-class SMSdispatcher(object):
-    spam = [ "BUY ONE",]
-    patterns = []
-
     @classmethod
-    def isspam(cls, message):   # Checking spam is a method of the dispatcher as may be language or context dependent
-        return any([sp in message.message for sp in cls.spam])
-
-    @classmethod
-    def update(self, **kwargs):
-        self.patterns.append(kwargs)    # Append kwargs as a dict
-
-    @classmethod
-    def dispatch(cls, msg, gateway, **kwargs ):
+    def setup(cls, databasefile=None, createTables=False, dropTablesFirst=False, dispatcher=None):
         """
-        A basic dispatcher, can be replaced in subclasses,
-        returns array of dicts with response to queue
+        :param databasefile:        Database file to connect to
+        :param createTables:        True if should create tables in file
+        :param dropTablesFirst:     True to clear tables first
+        :param dispatcher:          Class to handle incoming SMS
+        :return:
+        :exception:                 sqlite3.OperationalError if SQL fails e.g. if don't drop tables but they exist already
         """
-        #TODO clever dispatching matching regexps
-        #TODO allow modifiers on patterns.
-        if cls.isspam(msg):
-            msg.update(status=SMSmessageStatus.SPAM)
-            return None
-        for p in cls.patterns:
-            for s in p["strings"]:
-                if s in msg.message:
-                    return p["f"](msg)
-
-
-class TestDispatcher(SMSdispatcher):
+        if databasefile:
+            SqliteWrap.setdb(databasefile)
+            SqliteWrap.db.connect()
+        if createTables:
+            try:
+                SMSmessage.createtable(dropfirst=dropTablesFirst)
+                SMSgateway.createtable(dropfirst=dropTablesFirst)
+            except sqlite3.OperationalError as e:
+                print e
+        if dispatcher:
+            SMSrelay.dispatcher=dispatcher  # Setup for testing
 
     @classmethod
-    def thank(cls, msg):
-        return { "phonenumber": msg.phonenumber, "message": "Thanks a bunch" }
-
-TestDispatcher.update(strings = ["hello","bonjour"], f=TestDispatcher.thank )
-
+    def done(cls):
+        SqliteWrap.db.disconnect()
 
 def test():
-    from sqlitewrap import SqliteWrap
-    # Create table
-    SqliteWrap.setdb("smsmessagetest.db")
-    SqliteWrap.db.connect()
-    try:
-        SMSmessage.createtable(dropfirst=True)    # ONLY WORKS ONCE
-        SMSgateway.createtable(dropfirst=True)    # ONLY WORKS ONCE
-    except sqlite3.OperationalError as e:
-        print e
     print "Testing SMS Relay"
-    SMSrelay.dispatcher=TestDispatcher  # Setup for testing
-    assert SMSmessageStatus.QUEUED.name == "QUEUED", "Check enumerations loading correctly"
-    assert isinstance(SMSmessageStatus.QUEUED, SMSmessageStatus), "Should be an instance if want conform to work"
+    SMSrelay.setup(
+        databasefile="smsmessagetest.db",           # Connect to the database in this test file
+        createTables=True, dropTablesFirst=True,    # Create tables, removing whatever was there first
+        dispatcher = SMSdispatcher,                 # Class to handle incoming
+    )
+    assert SMSstatus.QUEUED.name == "QUEUED", "Check enumerations loading correctly"
+    assert isinstance(SMSstatus.QUEUED, SMSstatus), "Should be an instance if want conform to work"
     resp = SMSrelay.sms_poll(**{'battery_strength': u'50', 'timestamp': u'2017-02-07T06:28Z', 'wifi_strength': u'0', 'gsm_strength': u'[38]',
      'charging': u'true', 'device_id': u'1007'})
     # Side effect of creating Gateway(1)
@@ -239,6 +266,12 @@ def test():
      'charging': u'true', 'device_id': u'1007'})
     assert resp["message"] == "Hello world", "Expect to find the message queued above"
     assert len(SMSgateways.all()) == 1
+    # Set up dispatcher for a trivial response
+    SMSdispatcher.update(strings = ["hello","bonjour"], type=SMSdispatchtype.STRINGIN,
+                         f=lambda msg: { "phonenumber": msg.phonenumber, "message": "Thanks a bunch" } )
+    SMSdispatcher.update(regex = [r"name is (?P<name>[A-Za-z ]+?) from (?P<from>[A-Z][a-zA-Z]+)"], type=SMSdispatchtype.REGEX,
+                         f=lambda msg, r: { "phonenumber": msg.phonenumber, "message": "Hi %s how is the weather in %s" % (r.group("name"),r.group("from")) } )
+
     resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'hello', 'from': u'+16177179014',
                                     'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100001'})
     assert len(SMSgateways.all()) == 1
@@ -247,12 +280,21 @@ def test():
            'charging': u'true', 'device_id': u'1007', 'sim_num': u'[14159969138]'})
     assert len(SMSgateways.all()) == 1
     assert resp["message"] == "Thanks a bunch", "Should be response from TestDispatcher"
+
+    # Test regex
+    resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'My name is Fred from London', 'from': u'+16177179014',
+                                    'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100004'})
+    resp = SMSrelay.sms_poll(_verbose=False, **{'battery_strength': u'50', 'timestamp': u'2017-02-07T06:28Z', 'wifi_strength': u'0', 'gsm_strength': u'[38]',
+           'charging': u'true', 'device_id': u'1007', 'sim_num': u'[14159969138]'})
+    assert resp["message"] == "Hi Fred how is the weather in London", "Should handle regex"
+
     # Test loops
-    resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'lala', 'from': u'+16177179014',
+    resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'hello', 'from': u'+16177179014',
                                     'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100001'})
     resp = SMSrelay.sms_poll(_verbose=False, **{'battery_strength': u'50', 'timestamp': u'2017-02-07T06:28Z', 'wifi_strength': u'0', 'gsm_strength': u'[38]',
            'charging': u'true', 'device_id': u'1007', 'sim_num': u'[14159969138]'})
     assert len(resp) == 0, "Should ignore loops"
+
     # Test spam
     resp = SMSrelay.sms_incoming(**{'timestamp': u'2017-02-08T05:37:06Z', 'message': u'BUY ONE', 'from': u'+16177179014',
                                     'sent_to': u'+14159969138', 'device_id': u'1007', 'message_id': u'100003'})

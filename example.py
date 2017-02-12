@@ -98,8 +98,8 @@ def test():
     assert ModelExample(1).load().parmstime == now, "Should round trip datetime"
     brother = ModelExample.insert(name="Brian")
     sister = ModelExample.insert(name="Jane")
-    sibs = ModelExamples([brother, sister])
-    bar.update(siblings = sibs)
+    sibs = ModelExamples([brother, sister])                             # Create a plural containing two ModelExample
+    bar.update(siblings = sibs)                                         # Store in siblings
     assert ModelExample(1).load().siblings.contains(brother)
     assert not ModelExample(1).load().siblings.contains(bar), "Shouldnt contain bar"
     bar.update(parmsmodels = sibs)
