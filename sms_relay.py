@@ -21,7 +21,6 @@ TODO
 - ignore spam numbers and short codes (maybe after get google phonenumbers working)
 - handle expired
 - Add priorities to dispatch patterns
-- Add HTTP server, prob in application
 - Match final version of SMSrelay android app
 - http return errors using send_error
 
@@ -170,6 +169,7 @@ class SMSdispatcher(object):
                         return p["f"](msg, m)
 
 class SMSHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    # NOTE this is a code also in dweb (and more developed there) may want to pull changes from there if working on this
     dispatchclass = None
 
     def do_GET(self):
@@ -198,8 +198,28 @@ class SMSHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         cls.dispatchclass = dispatchclass       # Stops circular reference
         BaseHTTPServer.HTTPServer( ipandport, cls).serve_forever()
 
+class HTTPdispatcher():
+    """
+    Simple HTTPdispatcher,
+    Subclasses should define "exposed" as a list of exposed methods
+    """
+    exposed = []
 
-class SMSrelay():   # Encapsulation of class methods that define this
+    @classmethod
+    def dispatch(cls, req, **kwargs):
+        verbose=True
+        #"sms_poll": sms_poll,
+        #"sms_incoming": sms_incoming
+        if verbose: print "HTTPdispatcher.dispatch",req,kwargs
+        if req in cls.exposed:
+            return getattr(cls, req)(**kwargs)
+        else:
+            if verbose: print "HTTPdispatcher.dispatch unimplemented:"+req
+            raise SMSRelayExceptionInvalidRequest(req=req)
+
+
+
+class SMSrelay(HTTPdispatcher):   # Encapsulation of class methods that define this
     dispatcher = None       # Set to class to dispatch messages to
     exposed = ("sms_poll", "sms_incoming")
 
@@ -292,19 +312,6 @@ class SMSrelay():   # Encapsulation of class methods that define this
     @classmethod
     def done(cls):
         SqliteWrap.db.disconnect()
-
-
-    @classmethod
-    def dispatch(cls, req, **kwargs):
-        #"sms_poll": sms_poll,
-        #"sms_incoming": sms_incoming
-        #TODO raise exception if not exposed
-        print "XXX@292 dispatching",req,kwargs
-        if req in SMSrelay.exposed:
-            return getattr(cls, req)(**kwargs)
-        else:
-            print "XXX@295 raising"
-            raise SMSRelayExceptionInvalidRequest(req=req)
 
 
 

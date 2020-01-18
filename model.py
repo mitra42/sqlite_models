@@ -71,10 +71,7 @@ class Model(object):
         Gets fields of model so can access as e.g. foo = Model(), foo.A
         """
         if not self._loaded:
-            self.load()
-        return self.__dict__.get(name,None)
-
-    """
+            self.load()    """
     def __setattr__(self, name, value):
         #TODO - may need to do things if set fields and not handled by convertor
         #if name[0] == "_":  # #Write fields starting with _ direct to object e.g. _loaded

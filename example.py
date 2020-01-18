@@ -26,7 +26,7 @@ sqlite3.register_converter("modelexample", convert_modelexample)  # Return JSON,
 class ModelExamples(Models):
     _singular = ModelExample
 
-ModelExample._parmfields["parmsmodels"]=ModelExamples   # Done here as undefined during definition of ModelExample
+ModelExample._parmfields["parmsmodels"]=ModelExamples   # Done here as not yet defined during definition of ModelExample
 
 def convert_modelexamples(s):
     return ModelExamples(loads(s))
